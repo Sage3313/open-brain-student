@@ -3,6 +3,7 @@
 // Security: every request must carry "Authorization: Bearer <MCP_ACCESS_KEY>". Reads and writes
 // are scoped to Sage's own rows (OWNER_USER_ID) using the server-only service role key.
 import { createClient } from "npm:@supabase/supabase-js@2.45.4";
+import { formatAz } from "../_shared/when.ts";
 
 const db = createClient(Deno.env.get("SUPABASE_URL")!, Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!, {
   auth: { persistSession: false },
@@ -62,6 +63,33 @@ const TOOLS = [
       required: ["content"],
     },
   },
+  {
+    name: "add_reminder",
+    description: "Schedule a reminder that Sage's Telegram bot texts to Sage's phone at the given time. Sage lives in Arizona (America/Phoenix, UTC-7, no daylight saving). Pass `when` as an ISO 8601 time WITH offset, e.g. 2026-11-19T07:00:00-07:00. Confirm the time back to Sage in Arizona time.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        text: { type: "string", description: "What to remind Sage about" },
+        when: { type: "string", description: "ISO 8601 date-time with offset, Arizona is -07:00" },
+      },
+      required: ["text", "when"],
+    },
+  },
+  {
+    name: "list_reminders",
+    description: "List Sage's upcoming reminders with their ids.",
+    inputSchema: { type: "object", properties: {} },
+  },
+  {
+    name: "cancel_reminder",
+    description: "Cancel an upcoming reminder by id (ids come from list_reminders).",
+    inputSchema: { type: "object", properties: { id: { type: "number" } }, required: ["id"] },
+  },
+  {
+    name: "system_status",
+    description: "Health of the brain's cloud jobs (reminder sender, morning text): when each last ran and whether it succeeded. Use in the morning brief to catch silent failures.",
+    inputSchema: { type: "object", properties: {} },
+  },
 ];
 
 type Row = { id: string; content: string; created_at: string; metadata: Record<string, unknown> | null };
@@ -110,6 +138,44 @@ async function callTool(name: string, args: any): Promise<string> {
       .select("id, created_at").single();
     if (error) throw new Error(error.message);
     return `Saved to Sage's brain (id ${data.id}).`;
+  }
+  if (name === "add_reminder") {
+    const text = String(args?.text ?? "").trim();
+    const at = new Date(String(args?.when ?? ""));
+    if (!text) throw new Error("text is required");
+    if (isNaN(at.getTime())) throw new Error("when must be an ISO date-time like 2026-11-19T07:00:00-07:00");
+    if (at.getTime() < Date.now() - 60_000) throw new Error("that time is in the past");
+    const { data, error } = await db.from("reminders")
+      .insert({ user_id: OWNER, text, remind_at: at.toISOString(), source: "claude" }).select("id").single();
+    if (error) throw new Error(error.message);
+    return `Reminder #${data.id} set for ${formatAz(at)} (Arizona time): ${text}`;
+  }
+  if (name === "list_reminders") {
+    const { data, error } = await db.from("reminders").select("id, text, remind_at")
+      .eq("user_id", OWNER).is("sent_at", null).eq("cancelled", false).order("remind_at").limit(30);
+    if (error) throw new Error(error.message);
+    if (!data?.length) return "No upcoming reminders.";
+    return data.map((r) => `#${r.id}  ${formatAz(new Date(r.remind_at))}  ${r.text}`).join("\n");
+  }
+  if (name === "cancel_reminder") {
+    const id = Number(args?.id);
+    const { data, error } = await db.from("reminders").update({ cancelled: true })
+      .eq("id", id).eq("user_id", OWNER).is("sent_at", null).select("text");
+    if (error) throw new Error(error.message);
+    return data?.length ? `Cancelled #${id}: ${data[0].text}` : `No upcoming reminder #${id}.`;
+  }
+  if (name === "system_status") {
+    const { data, error } = await db.from("job_runs").select("job, last_run, status, detail").order("job");
+    if (error) throw new Error(error.message);
+    const now = Date.now();
+    const lines = (data ?? []).map((j) => {
+      const mins = Math.round((now - new Date(j.last_run).getTime()) / 60000);
+      return `${j.job}: ${j.status}, last ran ${mins} min ago (${j.detail ?? ""})`;
+    });
+    const tick = (data ?? []).find((j) => j.job === "reminders-tick");
+    if (!tick) lines.push("WARNING: reminders-tick has never run.");
+    else if (now - new Date(tick.last_run).getTime() > 10 * 60000) lines.push("WARNING: reminders-tick has not run in over 10 minutes, reminders are NOT being sent.");
+    return lines.join("\n") || "No job runs recorded yet.";
   }
   throw new Error(`Unknown tool: ${name}`);
 }

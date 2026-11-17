@@ -6,6 +6,7 @@
 //     who finds the bot gets told their ID and nothing is saved.
 // Saves as OWNER_USER_ID with the server-only service role key.
 import { createClient } from "npm:@supabase/supabase-js@2.45.4";
+import { formatAz, parseWhen } from "../_shared/when.ts";
 
 const db = createClient(Deno.env.get("SUPABASE_URL")!, Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!, {
   auth: { persistSession: false },
@@ -55,6 +56,37 @@ async function search(chatId: number, q: string) {
   return send(chatId, data.map((t, i) => `${i + 1}. ${t.content.slice(0, 200)}`).join("\n\n"));
 }
 
+async function remind(chatId: number, args: string) {
+  const r = parseWhen(args);
+  if ("error" in r) {
+    const why = r.error === "past" ? "That time is already past."
+      : r.error === "text" ? "Add what to remind you about."
+      : "I could not read the time.";
+    return send(chatId, why + "\nExamples:\n/remind 3pm call Jack\n/remind tomorrow 9am submit MAT 251\n/remind in 2h eat a real meal\n/remind fri 6pm text Ryder\n/remind 11/20 10:30am exam");
+  }
+  const { error } = await db.from("reminders").insert({ user_id: OWNER, text: r.text, remind_at: r.at.toISOString(), source: "telegram" });
+  return send(chatId, error ? "✗ Not saved: " + error.message : `⏰ Got it. ${formatAz(r.at)}: ${r.text}`);
+}
+
+async function listReminders(chatId: number) {
+  const { data, error } = await db.from("reminders").select("id, text, remind_at")
+    .eq("user_id", OWNER).is("sent_at", null).eq("cancelled", false)
+    .order("remind_at", { ascending: true }).limit(20);
+  if (error) return send(chatId, "Could not load: " + error.message);
+  if (!data?.length) return send(chatId, "No upcoming reminders. Set one with /remind 3pm call Jack");
+  return send(chatId, "Upcoming (cancel with /cancel number):\n\n" +
+    data.map((r) => `#${r.id}  ${formatAz(new Date(r.remind_at))}\n${r.text}`).join("\n\n"));
+}
+
+async function cancelReminder(chatId: number, arg: string) {
+  const id = Number(arg.replace("#", "").trim());
+  if (!id) return send(chatId, "Usage: /cancel 12 (the number from /reminders)");
+  const { data, error } = await db.from("reminders").update({ cancelled: true })
+    .eq("id", id).eq("user_id", OWNER).is("sent_at", null).select("text");
+  if (error) return send(chatId, "Could not cancel: " + error.message);
+  return send(chatId, data?.length ? `Cancelled: ${data[0].text}` : `No upcoming reminder #${id}.`);
+}
+
 Deno.serve(async (req) => {
   // Always answer Telegram with 200 so it does not retry forever; problems go back as a reply.
   const ok = () => new Response("ok");
@@ -87,11 +119,15 @@ Deno.serve(async (req) => {
   }
 
   if (text === "/start" || text === "/help") {
-    await send(chatId, "Text me anything and I save it to your brain.\n/recent shows your last 5 thoughts.\n/search word finds thoughts.");
+    await send(chatId, "Text me anything and I save it to your brain.\n/recent shows your last 5 thoughts.\n/search word finds thoughts.\n/remind 3pm call Jack sets a reminder.\n/reminders lists upcoming ones.\n/cancel 12 cancels one.");
     return ok();
   }
   if (text === "/recent") { await recent(chatId); return ok(); }
   if (text.startsWith("/search")) { await search(chatId, text.slice(7)); return ok(); }
+  if (text.startsWith("/reminders")) { await listReminders(chatId); return ok(); }
+  if (text.startsWith("/remind")) { await remind(chatId, text.slice(7)); return ok(); }
+  if (text.startsWith("/cancel")) { await cancelReminder(chatId, text.slice(7)); return ok(); }
+  if (/^remind me\b/i.test(text)) { await remind(chatId, text.replace(/^remind me\s*/i, "")); return ok(); }
 
   const metadata: Record<string, unknown> = { source: "telegram" };
   const url = text.match(/https?:\/\/\S+/);
