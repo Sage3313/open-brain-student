@@ -94,7 +94,7 @@ async function weight(chatId: number, arg: string) {
     const lbs = parseLbs(arg);
     if (lbs === null) return send(chatId, "I could not read that weight. Example: /w 172.4");
     await logWeight(db, OWNER, lbs, "telegram");
-    return send(chatId, `⚖️ Logged ${lbs.toFixed(1)} lbs for today.\n\n` + await weightSummary(db, OWNER, 5));
+    return send(chatId, `⚖️ Logged ${lbs.toFixed(1)} lbs for today.`);
   } catch (e) {
     return send(chatId, "✗ Weight not saved: " + (e as Error).message);
   }

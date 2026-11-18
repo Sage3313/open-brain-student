@@ -88,7 +88,7 @@ const TOOLS = [
   },
   {
     name: "log_weight",
-    description: "Log Sage's body weight in pounds for a day (default today, Arizona time). One entry per day, a new one replaces that day's entry. After logging, share the trend from the result, focusing on the 7-day average, not the daily swing.",
+    description: "Log Sage's body weight in pounds for a day (default today, Arizona time). One entry per day, a new one replaces that day's entry. After logging, just confirm it. Do not volunteer averages or trends unless Sage asks.",
     inputSchema: {
       type: "object",
       properties: {
@@ -101,7 +101,7 @@ const TOOLS = [
   {
     name: "weight_history",
     description: "Sage's weight journal: latest weigh-in, 7-day average vs the week before, total change since the first entry, and recent daily entries.",
-    inputSchema: { type: "object", properties: { days: { type: "number", description: "How many recent entries to list, default 14, max 90" } } },
+    inputSchema: { type: "object", properties: { days: { type: "number", description: "How many recent entries to list, default 14, max 90 (use 30 for a 30-day graph)" } } },
   },
   {
     name: "system_status",
@@ -188,7 +188,7 @@ async function callTool(name: string, args: any): Promise<string> {
     const day = args?.date ? String(args.date).slice(0, 10) : azToday();
     if (!/^\d{4}-\d{2}-\d{2}$/.test(day) || day > azToday()) throw new Error("date must be YYYY-MM-DD and not in the future");
     await logWeight(db, OWNER, lbs, "claude", day);
-    return `Logged ${lbs.toFixed(1)} lbs for ${day}.\n\n` + await weightSummary(db, OWNER, 7);
+    return `Logged ${lbs.toFixed(1)} lbs for ${day}.`;
   }
   if (name === "weight_history") {
     const n = Math.min(Math.max(1, Math.floor(Number(args?.days) || 14)), 90);

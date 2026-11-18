@@ -5,7 +5,6 @@
 // so a silent stop is visible (the morning brief checks it).
 import { createClient } from "npm:@supabase/supabase-js@2.45.4";
 import { formatAz } from "../_shared/when.ts";
-import { azToday } from "../_shared/weight.ts";
 
 const db = createClient(Deno.env.get("SUPABASE_URL")!, Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!, {
   auth: { persistSession: false },
@@ -87,16 +86,8 @@ async function morning() {
   }
   if (!rem?.length && !commitments.length) lines.push("", "Nothing scheduled yet. What is the one thing today?");
 
-  // Weight: ask for today's weigh-in and show the 7-day trend so progress is visible.
-  const today = azToday(now);
-  const weekAgo = new Date(Date.parse(today + "T12:00:00Z") - 7 * 86400_000).toISOString().slice(0, 10);
-  const { data: wts } = await db.from("weigh_ins").select("day, lbs").eq("user_id", OWNER)
-    .gt("day", weekAgo).order("day", { ascending: false });
-  lines.push("", "⚖️ Weigh in after the bathroom, before you eat. Text the number, like 172.4");
-  if (wts?.length) {
-    const avg = wts.reduce((a, w) => a + Number(w.lbs), 0) / wts.length;
-    lines.push(`Last: ${Number(wts[0].lbs).toFixed(1)} on ${wts[0].day}. 7-day average: ${avg.toFixed(1)}.`);
-  }
+  // Weight: just a nudge to log it. No trends here, Sage asks for a graph when they want one.
+  lines.push("", "⚖️ Weigh in after the bathroom, before you eat. Text the number, like 127.4");
   lines.push("", "Run /morning-brief in Claude when you sit down. Eat breakfast. Start with God.");
   const ok = await send(lines.join("\n"));
   if (!ok) throw new Error("Telegram send failed");
