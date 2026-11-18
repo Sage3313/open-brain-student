@@ -4,6 +4,7 @@
 // are scoped to Sage's own rows (OWNER_USER_ID) using the server-only service role key.
 import { createClient } from "npm:@supabase/supabase-js@2.45.4";
 import { formatAz } from "../_shared/when.ts";
+import { azToday, logWeight, weightSummary } from "../_shared/weight.ts";
 
 const db = createClient(Deno.env.get("SUPABASE_URL")!, Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!, {
   auth: { persistSession: false },
@@ -86,6 +87,23 @@ const TOOLS = [
     inputSchema: { type: "object", properties: { id: { type: "number" } }, required: ["id"] },
   },
   {
+    name: "log_weight",
+    description: "Log Sage's body weight in pounds for a day (default today, Arizona time). One entry per day, a new one replaces that day's entry. After logging, share the trend from the result, focusing on the 7-day average, not the daily swing.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        lbs: { type: "number", description: "Weight in pounds, e.g. 172.4" },
+        date: { type: "string", description: "Optional YYYY-MM-DD for a past day, default today in Arizona" },
+      },
+      required: ["lbs"],
+    },
+  },
+  {
+    name: "weight_history",
+    description: "Sage's weight journal: latest weigh-in, 7-day average vs the week before, total change since the first entry, and recent daily entries.",
+    inputSchema: { type: "object", properties: { days: { type: "number", description: "How many recent entries to list, default 14, max 90" } } },
+  },
+  {
     name: "system_status",
     description: "Health of the brain's cloud jobs (reminder sender, morning text): when each last ran and whether it succeeded. Use in the morning brief to catch silent failures.",
     inputSchema: { type: "object", properties: {} },
@@ -163,6 +181,18 @@ async function callTool(name: string, args: any): Promise<string> {
       .eq("id", id).eq("user_id", OWNER).is("sent_at", null).select("text");
     if (error) throw new Error(error.message);
     return data?.length ? `Cancelled #${id}: ${data[0].text}` : `No upcoming reminder #${id}.`;
+  }
+  if (name === "log_weight") {
+    const lbs = Math.round(Number(args?.lbs) * 10) / 10;
+    if (!Number.isFinite(lbs) || lbs < 50 || lbs > 600) throw new Error("lbs must be a body weight in pounds, e.g. 172.4");
+    const day = args?.date ? String(args.date).slice(0, 10) : azToday();
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(day) || day > azToday()) throw new Error("date must be YYYY-MM-DD and not in the future");
+    await logWeight(db, OWNER, lbs, "claude", day);
+    return `Logged ${lbs.toFixed(1)} lbs for ${day}.\n\n` + await weightSummary(db, OWNER, 7);
+  }
+  if (name === "weight_history") {
+    const n = Math.min(Math.max(1, Math.floor(Number(args?.days) || 14)), 90);
+    return await weightSummary(db, OWNER, n);
   }
   if (name === "system_status") {
     const { data, error } = await db.from("job_runs").select("job, last_run, status, detail").order("job");

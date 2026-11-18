@@ -7,6 +7,7 @@
 // Saves as OWNER_USER_ID with the server-only service role key.
 import { createClient } from "npm:@supabase/supabase-js@2.45.4";
 import { formatAz, parseWhen } from "../_shared/when.ts";
+import { logWeight, parseLbs, weightSummary } from "../_shared/weight.ts";
 
 const db = createClient(Deno.env.get("SUPABASE_URL")!, Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!, {
   auth: { persistSession: false },
@@ -87,6 +88,18 @@ async function cancelReminder(chatId: number, arg: string) {
   return send(chatId, data?.length ? `Cancelled: ${data[0].text}` : `No upcoming reminder #${id}.`);
 }
 
+async function weight(chatId: number, arg: string) {
+  try {
+    if (!arg.trim()) return send(chatId, "⚖️ Weight journal\n\n" + await weightSummary(db, OWNER, 14));
+    const lbs = parseLbs(arg);
+    if (lbs === null) return send(chatId, "I could not read that weight. Example: /w 172.4");
+    await logWeight(db, OWNER, lbs, "telegram");
+    return send(chatId, `⚖️ Logged ${lbs.toFixed(1)} lbs for today.\n\n` + await weightSummary(db, OWNER, 5));
+  } catch (e) {
+    return send(chatId, "✗ Weight not saved: " + (e as Error).message);
+  }
+}
+
 Deno.serve(async (req) => {
   // Always answer Telegram with 200 so it does not retry forever; problems go back as a reply.
   const ok = () => new Response("ok");
@@ -119,7 +132,7 @@ Deno.serve(async (req) => {
   }
 
   if (text === "/start" || text === "/help") {
-    await send(chatId, "Text me anything and I save it to your brain.\n/recent shows your last 5 thoughts.\n/search word finds thoughts.\n/remind 3pm call Jack sets a reminder.\n/reminders lists upcoming ones.\n/cancel 12 cancels one.");
+    await send(chatId, "Text me anything and I save it to your brain.\n/recent shows your last 5 thoughts.\n/search word finds thoughts.\n/remind 3pm call Jack sets a reminder.\n/reminders lists upcoming ones.\n/cancel 12 cancels one.\n/w 172.4 logs your weight (or just text the number).\n/weight shows your progress.");
     return ok();
   }
   if (text === "/recent") { await recent(chatId); return ok(); }
@@ -127,6 +140,9 @@ Deno.serve(async (req) => {
   if (text.startsWith("/reminders")) { await listReminders(chatId); return ok(); }
   if (text.startsWith("/remind")) { await remind(chatId, text.slice(7)); return ok(); }
   if (text.startsWith("/cancel")) { await cancelReminder(chatId, text.slice(7)); return ok(); }
+  const wm = text.match(/^\/(?:w|weight)(?:@\w+)?(?:\s+(.*))?$/i);
+  if (wm) { await weight(chatId, wm[1] ?? ""); return ok(); }
+  if (parseLbs(text) !== null) { await weight(chatId, text); return ok(); }
   if (/^remind me\b/i.test(text)) { await remind(chatId, text.replace(/^remind me\s*/i, "")); return ok(); }
 
   const metadata: Record<string, unknown> = { source: "telegram" };
